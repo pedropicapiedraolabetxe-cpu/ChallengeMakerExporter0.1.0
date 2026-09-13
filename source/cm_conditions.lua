@@ -186,13 +186,37 @@ end
 local function validEnemyFilter(filter)
     if type(filter)~="table" then return false end
     if filter.kind=="any" or filter.kind=="boss" or filter.kind=="champion" then return true end
+    if filter.kind=="selected" then
+        if type(filter.enemies)~="table" or #filter.enemies==0 then return false end
+        for _,enemy in ipairs(filter.enemies) do if type(enemy)~="table" or tonumber(enemy.type)==nil then return false end end
+        return true
+    end
     return filter.kind=="fixed" and tonumber(filter.type)~=nil
 end
 local function enemyFilterLabel(filter)
     if type(filter)~="table" or filter.kind=="any" then return "ANY ENEMY" end
     if filter.kind=="boss" then return "ANY BOSS" end
     if filter.kind=="champion" then return "ANY CHAMPION" end
+    if filter.kind=="selected" then
+        if type(filter.enemies)=="table" and #filter.enemies==1 then return tostring(filter.enemies[1].name or "1 ENEMY") end
+        return tostring(type(filter.enemies)=="table" and #filter.enemies or 0).." ENEMIES"
+    end
     return tostring(filter.name or ("ENTITY "..tostring(filter.type or "?")))
+end
+local function enemyFilterKey(filter)
+    if type(filter)~="table" then return "" end
+    if filter.kind~="selected" then return tostring(filter.kind or "").."_"..tostring(filter.type or "").."_"..tostring(filter.variant or "").."_"..tostring(filter.subtype or "") end
+    local parts={};for _,enemy in ipairs(filter.enemies or {}) do parts[#parts+1]=tostring(enemy.type)..":"..tostring(enemy.variant or "")..":"..tostring(enemy.subtype or "") end
+    table.sort(parts);return "selected_"..table.concat(parts,"-")
+end
+local function enemyMatchesFilter(enemy,filter)
+    if type(filter.matches)=="table" and #filter.matches>0 then
+        for _,match in ipairs(filter.matches) do
+            if tonumber(match.type)==tonumber(enemy.type) and (match.variant==nil or tonumber(match.variant)==tonumber(enemy.variant)) and (match.subtype==nil or tonumber(match.subtype)==tonumber(enemy.subtype)) then return true end
+        end
+        return false
+    end
+    return tonumber(filter.type)==tonumber(enemy.type) and (filter.variant==nil or tonumber(filter.variant)==tonumber(enemy.variant)) and (filter.subtype==nil or tonumber(filter.subtype)==tonumber(enemy.subtype))
 end
 local function validTriggerNumber(param)
     return type(param)=="table" and tonumber(param.amount)~=nil and tonumber(param.amount)>0
@@ -346,7 +370,7 @@ function M.Key(r)
     if r.trigger=="item_used" and type(r.itemUse)=="table" then triggerKey=triggerKey.."_"..tostring(r.itemUse.kind).."_"..tostring(r.itemUse.token or "") end
     if r.trigger=="pickup_collected" and type(r.pickupFilter)=="table" then triggerKey=triggerKey.."_"..tostring(r.pickupFilter.kind) end
     if r.trigger=="pickup_count" and type(r.pickupCount)=="table" then triggerKey=triggerKey.."_"..tostring(r.pickupCount.kind).."_"..tostring(r.pickupCount.amount) end
-    if r.trigger=="enemy_killed" and type(r.enemyFilter)=="table" then triggerKey=triggerKey.."_"..tostring(r.enemyFilter.kind).."_"..tostring(r.enemyFilter.type or "").."_"..tostring(r.enemyFilter.variant or "").."_"..tostring(r.enemyFilter.subtype or "") end
+    if r.trigger=="enemy_killed" then triggerKey=triggerKey.."_"..enemyFilterKey(r.enemyFilter) end
     if (r.trigger=="room_entered_x" or r.trigger=="room_cleared_x" or r.trigger=="floor_cleared_time") and type(r.triggerParam)=="table" then triggerKey=triggerKey.."_"..tostring(r.triggerParam.amount or "") end
     if type(r.extra)=="table" then triggerKey=triggerKey.."_"..tostring(r.extra.kind or r.extra.stat or r.extra.key or r.extra.token or "").."_"..tostring(r.extra.direction or "").."_"..tostring(r.extra.amount or "") end
     if type(r.eventConfig)=="table" then triggerKey=triggerKey.."_"..tostring(r.eventConfig.roomType or r.eventConfig.type or "").."_"..tostring(r.eventConfig.variant or "").."_"..tostring(r.eventConfig.subtype or "") end
@@ -354,7 +378,7 @@ function M.Key(r)
         triggerKey=triggerKey.."_"..tostring(r.voidFilter.category).."_"..tostring(r.voidFilter.all)
         local choices={};for token,on in pairs(r.voidFilter.choices or {}) do choices[#choices+1]=tostring(token).."="..tostring(on==true) end;table.sort(choices);triggerKey=triggerKey.."_"..table.concat(choices,"-")
     end
-    if r.logic and r.secondary then local s=r.secondary;triggerKey=triggerKey.."_"..r.logic.."_"..tostring(s.trigger).."_"..tostring(s.keyBinding and s.keyBinding.code or "").."_"..tostring(s.triggerParam and s.triggerParam.amount or "").."_"..tostring(s.itemUse and s.itemUse.token or "").."_"..tostring(s.pickupFilter and s.pickupFilter.kind or "").."_"..tostring(s.enemyFilter and s.enemyFilter.type or "").."_"..tostring(s.extra and (s.extra.token or s.extra.key or s.extra.kind or s.extra.amount) or "").."_"..tostring(s.roomFilter and roomFilterLabel(s.roomFilter) or "").."_"..tostring(s.bossFilter and bossFilterLabel(s.bossFilter) or "").."_"..tostring(s.voidFilter and extraLabel(s) or "") end
+    if r.logic and r.secondary then local s=r.secondary;triggerKey=triggerKey.."_"..r.logic.."_"..tostring(s.trigger).."_"..tostring(s.keyBinding and s.keyBinding.code or "").."_"..tostring(s.triggerParam and s.triggerParam.amount or "").."_"..tostring(s.itemUse and s.itemUse.token or "").."_"..tostring(s.pickupFilter and s.pickupFilter.kind or "").."_"..enemyFilterKey(s.enemyFilter).."_"..tostring(s.extra and (s.extra.token or s.extra.key or s.extra.kind or s.extra.amount) or "").."_"..tostring(s.roomFilter and roomFilterLabel(s.roomFilter) or "").."_"..tostring(s.bossFilter and bossFilterLabel(s.bossFilter) or "").."_"..tostring(s.voidFilter and extraLabel(s) or "") end
     if r.afterAmount then triggerKey=triggerKey.."_after_"..tostring(r.afterAmount) end
     triggerKey=triggerKey.."_cds_"..tostring(r.cooldownSeconds or 0).."_cdr_"..tostring(r.cooldownRooms or 0).."_chance_"..tostring(r.chance or 100).."_delay_"..tostring(r.delaySeconds or 0)
     return "condition_"..r.mode.."_"..triggerKey.."_"..r.action..(r.action=="hp_down" and ((r.hpLethal or r.hpNonlethal) and "_lethal" or "_nonlethal") or "")..
@@ -554,13 +578,8 @@ function M.Attach(mod, game, getConfig, isInitializing, blockedItem)
                 if f.kind=="any" then return true end
                 if f.kind=="boss" and e.boss then return true end
                 if f.kind=="champion" and e.champion then return true end
-                if f.kind=="fixed" then
-                    if type(f.matches)=="table" and #f.matches>0 then
-                        for _,m in ipairs(f.matches) do
-                            if tonumber(m.type)==tonumber(e.type) and (m.variant==nil or tonumber(m.variant)==tonumber(e.variant)) and (m.subtype==nil or tonumber(m.subtype)==tonumber(e.subtype)) then return true end
-                        end
-                    elseif tonumber(f.type)==tonumber(e.type) and (f.variant==nil or tonumber(f.variant)==tonumber(e.variant)) and (f.subtype==nil or tonumber(f.subtype)==tonumber(e.subtype)) then return true end
-                end
+                if f.kind=="fixed" and enemyMatchesFilter(e,f) then return true end
+                if f.kind=="selected" then for _,choice in ipairs(f.enemies) do if enemyMatchesFilter(e,choice) then return true end end end
             end
             return false
         end

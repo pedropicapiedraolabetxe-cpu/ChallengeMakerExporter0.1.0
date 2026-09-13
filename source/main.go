@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	appTitle = "Challenge Maker Exporter 0.8.105"
+	appTitle = "Challenge Maker Exporter 0.8.118"
 
 	WS_OVERLAPPEDWINDOW = 0x00CF0000
 	WS_VISIBLE          = 0x10000000
@@ -118,6 +119,7 @@ type Challenge struct {
 	StartingItems      []int                `json:"startingItems"`
 	StartingItemTokens []string             `json:"startingItemTokens"`
 	StartingPickups    []PickupRule         `json:"startingPickups"`
+	SizeSteps          *int                 `json:"sizeSteps"`
 	StartStats         FlexibleFloatMap     `json:"startStats"`
 	StartHealth        FlexibleIntMap       `json:"startHealth"`
 	StartCharges       FlexibleIntMap       `json:"startCharges"`
@@ -718,11 +720,14 @@ func buildGeneratedLua(cs []Challenge) string {
 		b.WriteString("        blindfold = " + strconv.FormatBool(c.Blindfold) + ",\n")
 		b.WriteString("        startStats = {")
 		for _, key := range []string{"speed", "tears", "damage", "range", "shot_speed", "luck"} {
-			if value, ok := c.StartStats[key]; ok && value >= -100 && value <= 100 {
+			if value, ok := c.StartStats[key]; ok && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && (key != "speed" || value >= 0.1 && value <= 2) && (key != "tears" || value <= 120) {
 				b.WriteString("[" + luaQuote(key) + "]=" + strconv.FormatFloat(value, 'f', -1, 64) + ",")
 			}
 		}
 		b.WriteString("},\n")
+		if c.SizeSteps != nil && *c.SizeSteps >= -999 && *c.SizeSteps <= 999 {
+			b.WriteString("        sizeSteps = " + strconv.Itoa(*c.SizeSteps) + ",\n")
+		}
 		b.WriteString("        startHealth = {")
 		for _, key := range []string{"containers", "red", "soul", "black", "bone", "rotten"} {
 			if v, ok := c.StartHealth[key]; ok && v >= 0 && v <= 48 {
@@ -805,11 +810,11 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("function mod:OnStartingStatCache(player,flag)\n")
 	b.WriteString("    if not activeConfig or not player or game:GetNumPlayers()<1 or GetPtrHash(player)~=GetPtrHash(Isaac.GetPlayer(0)) then return end\n")
 	b.WriteString("    local s=activeConfig.startStats or {}\n")
-	b.WriteString("    if flag==CacheFlag.CACHE_SPEED then player.MoveSpeed=math.max(0.1,player.MoveSpeed+(tonumber(s.speed) or 0))\n")
+	b.WriteString("    if flag==CacheFlag.CACHE_SPEED then player.MoveSpeed=math.min(2,math.max(0.1,player.MoveSpeed+(tonumber(s.speed) or 0)))\n")
 	b.WriteString("    elseif flag==CacheFlag.CACHE_RANGE then player.TearRange=math.max(40,player.TearRange+40*(tonumber(s.range) or 0))\n")
 	b.WriteString("    elseif flag==CacheFlag.CACHE_SHOTSPEED then player.ShotSpeed=math.max(0.1,player.ShotSpeed+(tonumber(s.shot_speed) or 0))\n")
 	b.WriteString("    elseif flag==CacheFlag.CACHE_LUCK then player.Luck=player.Luck+(tonumber(s.luck) or 0)\n")
-	b.WriteString("    elseif flag==CacheFlag.CACHE_FIREDELAY then local old=math.max(0.1,30/(math.max(-0.99,player.MaxFireDelay)+1));player.MaxFireDelay=30/math.max(0.1,old+(tonumber(s.tears) or 0))-1 end\n")
+	b.WriteString("    elseif flag==CacheFlag.CACHE_FIREDELAY then local old=math.max(0.1,30/(math.max(-0.99,player.MaxFireDelay)+1));player.MaxFireDelay=30/math.min(120,math.max(0.1,old+(tonumber(s.tears) or 0)))-1 end\n")
 	b.WriteString("end\n\n")
 	b.WriteString("function mod:OnStartingDamageStat(player,stage,value)\n")
 	b.WriteString("    if stage~=EvaluateStatStage.FLAT_DAMAGE or not activeConfig or not player or game:GetNumPlayers()<1 or GetPtrHash(player)~=GetPtrHash(Isaac.GetPlayer(0)) then return end\n")
@@ -817,8 +822,14 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("    local bonus=tonumber(s.damage) or 0\n")
 	b.WriteString("    if bonus~=0 then return math.max(0.1,value+bonus) end\n")
 	b.WriteString("end\n\n")
+	b.WriteString("function mod:OnSizeCache(player,flag)\n")
+	b.WriteString("    if flag~=CacheFlag.CACHE_SIZE or not activeConfig or not player then return end\n")
+	b.WriteString("    local steps=math.floor(tonumber(activeConfig.sizeSteps) or 0)\n")
+	b.WriteString("    if steps~=0 then player.SpriteScale=player.SpriteScale*(steps>0 and 1.25^steps or 0.8^(-steps)) end\n")
+	b.WriteString("end\n\n")
 	b.WriteString("local pickupCatalog = nil\n")
 	b.WriteString("local spindownFixFrames = 0\n")
+	b.WriteString("local sizeStartupFrames = 0\n")
 	b.WriteString("local BANNABLE_ROOM_TYPES = {[2]=true,[4]=true,[6]=true,[7]=true,[8]=true,[9]=true,[10]=true,[11]=true,[12]=true,[13]=true,[14]=true,[15]=true,[16]=true,[18]=true,[19]=true,[20]=true,[21]=true,[22]=true,[24]=true,[29]=true}\n\n")
 	b.WriteString("local function resolvePlayerType(cfg)\n")
 	b.WriteString("    if not cfg then return 0 end\n")
@@ -930,6 +941,14 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("local function replacementPillColor(color) local raw,base,horse=pillColorParts(color); local out={}; for c=1,14 do if not bannedPillColors[c] then table.insert(out,c) end end; if #out==0 then return raw end; local seed=raw+game:GetSeeds():GetStartSeed(); local c=out[(math.abs(seed)%#out)+1]; if horse then c=c+(PillColor.PILL_GIANT_FLAG or 2048) end; return c end\n")
 	b.WriteString("function mod:OnPrePlayerAddPill(player,color,slot) if not activeConfig then return nil end; local raw,base=pillColorParts(color); if bannedPillColors[base] then return replacementPillColor(raw) end end\n")
 	b.WriteString("function mod:OnPillPickupInit(pickup) if not activeConfig or not pickup then return end; local raw,base=pillColorParts(pickup.SubType); if bannedPillColors[base] then local r=replacementPillColor(raw); if r~=raw then pickup:Morph(EntityType.ENTITY_PICKUP,PickupVariant.PICKUP_PILL,r,true,true,true) end end end\n\n")
+	b.WriteString("function mod:OnBannedPocketPickup(pickup)\n")
+	b.WriteString("    if not activeConfig or not pickup then return end\n")
+	b.WriteString("    local variant=pickup.Variant; local raw=tonumber(pickup.SubType) or 0; local banned=false; local replacement=nil; local rng=pickup:GetDropRNG()\n")
+	b.WriteString("    if variant==PickupVariant.PICKUP_TAROTCARD then banned=bannedCards[raw]; if banned then replacement=randomAllowedCard(rng,true,true,false) end\n")
+	b.WriteString("    elseif variant==PickupVariant.PICKUP_TRINKET then local flag=TrinketType.TRINKET_GOLDEN_FLAG or 32768; banned=bannedTrinkets[raw%flag]; if banned then replacement=randomAllowedTrinket(rng,raw>=flag) end end\n")
+	b.WriteString("    if not banned then return end; if not replacement then pickup:Remove(); return end\n")
+	b.WriteString("    local price,options=pickup.Price,pickup.OptionsPickupIndex; pickup:Morph(EntityType.ENTITY_PICKUP,variant,replacement,true,true,true); pickup.Price=price; pickup.OptionsPickupIndex=options\n")
+	b.WriteString("end\n\n")
 	b.WriteString("local function rebuildBannedSet()\n")
 	b.WriteString("    bannedSet = banGuard:Build(activeConfig)\n")
 	b.WriteString("end\n\n")
@@ -1059,6 +1078,7 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("function mod:OnGameStart(isContinued)\n")
 	b.WriteString("    refreshChallengeIds()\n")
 	b.WriteString("    spindownFixFrames = 0\n")
+	b.WriteString("    sizeStartupFrames = 45\n")
 	b.WriteString("    startingPickupsApplied = isContinued == true\n")
 	b.WriteString("    if not activeConfig then bannedSet = {}; bannedCards={}; bannedPills={}; bannedPillColors={}; bannedTrinkets={}; allowedPills=nil; return end\n")
 	b.WriteString("    enforceCharacter(activeConfig)\n")
@@ -1074,12 +1094,14 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("    general.ApplyCurses(activeConfig,game:GetLevel())\n")
 	b.WriteString("    if game:GetNumPlayers() > 0 then applyTransformations(Isaac.GetPlayer(0)) end\n")
 	b.WriteString("    if game:GetNumPlayers() > 0 and activeConfig.startStats and next(activeConfig.startStats) then local player=Isaac.GetPlayer(0);player:AddCacheFlags(START_STAT_FLAGS);player:EvaluateItems() end\n")
+	b.WriteString("    if game:GetNumPlayers() > 0 and tonumber(activeConfig.sizeSteps) then local player=Isaac.GetPlayer(0);player:AddCacheFlags(CacheFlag.CACHE_SIZE);player:EvaluateItems() end\n")
 	b.WriteString("end\n\n")
 	b.WriteString("function mod:OnUseSpindown()\n")
 	b.WriteString("    if activeConfig and next(bannedSet) then spindownFixFrames = 3 end\n")
 	b.WriteString("end\n\n")
 	b.WriteString("function mod:OnUpdate()\n")
 	b.WriteString("    if not activeConfig then return end\n")
+	b.WriteString("    if sizeStartupFrames > 0 then sizeStartupFrames=sizeStartupFrames-1; if (sizeStartupFrames==44 or sizeStartupFrames==35 or sizeStartupFrames==15 or sizeStartupFrames==0) and tonumber(activeConfig.sizeSteps) and game:GetNumPlayers()>0 then local p=Isaac.GetPlayer(0);p:AddCacheFlags(CacheFlag.CACHE_SIZE);p:EvaluateItems() end end\n")
 	b.WriteString("    for i = 0, game:GetNumPlayers() - 1 do applyNoSoul(activeConfig, Isaac.GetPlayer(i)) end\n")
 	b.WriteString("    if game:GetNumPlayers() > 0 then applyTransformations(Isaac.GetPlayer(0)) end\n")
 	b.WriteString("    if activeConfig.blindfold then\n")
@@ -1109,6 +1131,7 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("refreshChallengeIds()\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PLAYER_INIT, mod.OnPlayerInit)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_EVALUATE_CACHE, mod.OnTransformationCache, CacheFlag.CACHE_FAMILIARS)\n")
+	b.WriteString("mod:AddCallback(ModCallbacks.MC_EVALUATE_CACHE, mod.OnSizeCache, CacheFlag.CACHE_SIZE)\n")
 	b.WriteString("for _,flag in ipairs({CacheFlag.CACHE_SPEED,CacheFlag.CACHE_FIREDELAY,CacheFlag.CACHE_RANGE,CacheFlag.CACHE_SHOTSPEED,CacheFlag.CACHE_LUCK}) do mod:AddCallback(ModCallbacks.MC_EVALUATE_CACHE,mod.OnStartingStatCache,flag) end\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_EVALUATE_STAT,mod.OnStartingDamageStat,EvaluateStatStage.FLAT_DAMAGE)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, mod.OnGameStart)\n")
@@ -1118,6 +1141,10 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("if ModCallbacks.MC_PRE_PLAYER_ADD_PILL then mod:AddCallback(ModCallbacks.MC_PRE_PLAYER_ADD_PILL, mod.OnPrePlayerAddPill) end\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, mod.OnPillPickupInit, PickupVariant.PICKUP_PILL)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_UPDATE, mod.OnPillPickupInit, PickupVariant.PICKUP_PILL)\n")
+	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, mod.OnBannedPocketPickup, PickupVariant.PICKUP_TAROTCARD)\n")
+	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_UPDATE, mod.OnBannedPocketPickup, PickupVariant.PICKUP_TAROTCARD)\n")
+	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, mod.OnBannedPocketPickup, PickupVariant.PICKUP_TRINKET)\n")
+	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_PICKUP_UPDATE, mod.OnBannedPocketPickup, PickupVariant.PICKUP_TRINKET)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_USE_ITEM, mod.OnUseSpindown, CollectibleType.COLLECTIBLE_SPINDOWN_DICE)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_UPDATE, mod.OnUpdate)\n")
 	b.WriteString("mod:AddCallback(ModCallbacks.MC_POST_UPDATE, mod.OnDealHudUpdate)\n")

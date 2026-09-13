@@ -57,7 +57,7 @@ function M.Area(value,x,y,w,h,state,followEnd)
     end
 end
 function M.Attach(mod,getConfig,manualStart)
-    local state={open=false,scroll=0,wasDown=false,closing=false,hudWasVisible=nil}
+    local state={open=false,scroll=0,wasDown=false,closing=false,hudWasVisible=nil,restoreFrames=0}
     local lastChallenge=nil
     local mainMenuSeen=true
     local function setHUDVisible(visible)
@@ -65,8 +65,11 @@ function M.Attach(mod,getConfig,manualStart)
     end
     local function restoreHUD()
         if state.hudWasVisible ~= nil then
-            setHUDVisible(state.hudWasVisible)
+            -- The new-run callback may fire while Isaac has not shown the HUD
+            -- yet. IsVisible() is then false even for a normally visible HUD.
+            setHUDVisible(true)
             state.hudWasVisible=nil
+            state.restoreFrames=4
         end
     end
     local function hideHUD()
@@ -118,6 +121,10 @@ function M.Attach(mod,getConfig,manualStart)
     mod:AddCallback(ModCallbacks.MC_POST_RENDER,function()
         local down=mouseDown(0)
         if not state.open then
+            if state.restoreFrames > 0 then
+                setHUDVisible(true)
+                state.restoreFrames=state.restoreFrames-1
+            end
             -- Do not pass the click that closed the panel through to gameplay.
             if state.closing and not down then state.closing=false end
             state.wasDown=down;return
