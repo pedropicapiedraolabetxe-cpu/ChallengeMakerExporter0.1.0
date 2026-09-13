@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	appTitle = "Challenge Maker Exporter 0.8.118"
+	appTitle = "Challenge Maker Exporter 0.8.122"
 
 	WS_OVERLAPPEDWINDOW = 0x00CF0000
 	WS_VISIBLE          = 0x10000000
@@ -100,6 +100,7 @@ type MSG struct {
 
 type Challenge struct {
 	Description        string               `json:"description"`
+	SeedCode           string               `json:"seedCode"`
 	Conditions         json.RawMessage      `json:"conditions"`
 	ID                 string               `json:"id"`
 	Title              string               `json:"title"`
@@ -118,6 +119,8 @@ type Challenge struct {
 	Difficulty         int                  `json:"difficulty"`
 	StartingItems      []int                `json:"startingItems"`
 	StartingItemTokens []string             `json:"startingItemTokens"`
+	RequiredItems      []int                `json:"requiredItems"`
+	RequiredItemTokens []string             `json:"requiredItemTokens"`
 	StartingPickups    []PickupRule         `json:"startingPickups"`
 	SizeSteps          *int                 `json:"sizeSteps"`
 	StartStats         FlexibleFloatMap     `json:"startStats"`
@@ -126,6 +129,8 @@ type Challenge struct {
 	StartCoins         *int                 `json:"startCoins"`
 	StartBombs         *int                 `json:"startBombs"`
 	StartKeys          *int                 `json:"startKeys"`
+	MaxTime            *int                 `json:"maxTime"`
+	MaxLives           *int                 `json:"maxLives"`
 	CurseModes         FlexibleStringMap    `json:"curseModes"`
 	BannedPickups      []PickupRule         `json:"bannedPickups"`
 	BannedItems        []int                `json:"bannedItems"`
@@ -219,6 +224,12 @@ var descriptionLua string
 
 //go:embed cm_general.lua
 var generalLua string
+
+//go:embed cm_seed.lua
+var seedLua string
+
+//go:embed cm_run_limits.lua
+var runLimitsLua string
 
 //go:embed cm_bans.lua
 var banRulesLua string
@@ -523,11 +534,15 @@ func prepareFolderExport(modsDir, folder string, selected, saved []Challenge) (m
 	main = strings.Replace(main, `RegisterMod("Challenge Maker Exported", 1)`, "RegisterMod("+luaQuote(identity)+", 1)", 1)
 	main = strings.ReplaceAll(main, `include("cm_bans")`, "include("+luaQuote(moduleDir+"/cm_bans")+")")
 	main = strings.ReplaceAll(main, `include("cm_general")`, "include("+luaQuote(moduleDir+"/cm_general")+")")
+	main = strings.ReplaceAll(main, `include("cm_seed")`, "include("+luaQuote(moduleDir+"/cm_seed")+")")
+	main = strings.ReplaceAll(main, `include("cm_run_limits")`, "include("+luaQuote(moduleDir+"/cm_run_limits")+")")
 	main = strings.ReplaceAll(main, `include('cm_conditions')`, "include("+luaQuote(moduleDir+"/cm_conditions")+")")
 	conditions := strings.ReplaceAll(conditionsLua, `include("cm_rewards")`, "include("+luaQuote(moduleDir+"/cm_rewards")+")")
 	files := map[string]string{
 		filepath.Join(outDir, moduleDir, "cm_description.lua"): descriptionLua,
 		filepath.Join(outDir, moduleDir, "cm_general.lua"):     generalLua,
+		filepath.Join(outDir, moduleDir, "cm_seed.lua"):        seedLua,
+		filepath.Join(outDir, moduleDir, "cm_run_limits.lua"):  runLimitsLua,
 		filepath.Join(outDir, "main.lua"):                      main,
 		filepath.Join(outDir, "content", "challenges.xml"):     buildChallengesXML(configs),
 		filepath.Join(outDir, "challenges.json"):               string(raw),
@@ -697,6 +712,7 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("local mod = RegisterMod(\"Challenge Maker Exported\", 1)\n")
 	b.WriteString("local game = Game()\n\n")
 	b.WriteString("local general = include(\"cm_general\")\n")
+	b.WriteString("local seedRules = include(\"cm_seed\")\n")
 	b.WriteString(noSoulLua)
 	b.WriteString("local configsByName = {\n")
 	for _, c := range cs {
@@ -715,6 +731,8 @@ func buildGeneratedLua(cs []Challenge) string {
 		}
 		b.WriteString("    [" + luaQuote(c.Title) + "] = {\n")
 		b.WriteString("        playerType = " + strconv.Itoa(c.PlayerType) + ",\n")
+		b.WriteString("        seedCode = " + luaQuote(c.SeedCode) + ",\n")
+		b.WriteString("        difficulty = " + strconv.Itoa(c.Difficulty) + ",\n")
 		b.WriteString("        playerIsModded = " + strconv.FormatBool(c.PlayerIsModded) + ",\n")
 		b.WriteString("        playerToken = " + luaQuote(c.PlayerToken) + ",\n")
 		b.WriteString("        blindfold = " + strconv.FormatBool(c.Blindfold) + ",\n")
@@ -755,6 +773,15 @@ func buildGeneratedLua(cs []Challenge) string {
 				b.WriteString("        " + entry.name + " = " + strconv.Itoa(*entry.value) + ",\n")
 			}
 		}
+		if c.MaxTime != nil && *c.MaxTime > 0 && *c.MaxTime <= 999999 { b.WriteString("        maxTime = " + strconv.Itoa(*c.MaxTime) + ",\n") }
+		if c.MaxLives != nil && *c.MaxLives > 0 && *c.MaxLives <= 99 { b.WriteString("        maxLives = " + strconv.Itoa(*c.MaxLives) + ",\n") }
+		b.WriteString("        legacyRequiredItemTokens = {")
+		if len(c.RequiredItemTokens)>0 {
+			for _,token := range c.RequiredItemTokens { if strings.TrimSpace(token)!="" { b.WriteString(luaQuote(token)+",") } }
+		} else {
+			for _,id := range c.RequiredItems { if id>0 { b.WriteString(luaQuote(strconv.Itoa(id)) + ",") } }
+		}
+		b.WriteString("},\n")
 		b.WriteString("        startingPickups = {\n")
 		for _, pickup := range c.StartingPickups {
 			b.WriteString("            {kind=" + luaQuote(pickup.Kind) + ", id=" + strconv.Itoa(pickup.ID) + ", token=" + luaQuote(pickup.Token) + ", delivery=" + luaQuote(pickup.Delivery) + "},\n")
@@ -800,6 +827,8 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("}\n\n")
 	b.WriteString("local configsById = {}\n")
 	b.WriteString("local activeConfig = nil\n")
+	b.WriteString("local seedCorrectionPending = false\n")
+	b.WriteString("local runLimits = nil\n")
 	b.WriteString("local banGuard = include(\"cm_bans\").Attach(mod, game, function() if activeConfig == configsById[Isaac.GetChallenge()] then return activeConfig end end)\n")
 	b.WriteString("local bannedSet = {}\n")
 	b.WriteString("local bannedRoomSet = {}\n")
@@ -1076,7 +1105,10 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("    applyPlayerRules(player)\n")
 	b.WriteString("end\n\n")
 	b.WriteString("function mod:OnGameStart(isContinued)\n")
+	b.WriteString("    runLimits.Reset()\n")
 	b.WriteString("    refreshChallengeIds()\n")
+	b.WriteString("    seedCorrectionPending=false\n")
+	b.WriteString("    if activeConfig and not isContinued then local _,wanted=seedRules.Parse(activeConfig.seedCode); if wanted and game:GetSeeds():GetStartSeed()~=wanted then seedCorrectionPending=true; return end end\n")
 	b.WriteString("    spindownFixFrames = 0\n")
 	b.WriteString("    sizeStartupFrames = 45\n")
 	b.WriteString("    startingPickupsApplied = isContinued == true\n")
@@ -1101,6 +1133,8 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("end\n\n")
 	b.WriteString("function mod:OnUpdate()\n")
 	b.WriteString("    if not activeConfig then return end\n")
+	b.WriteString("    if seedCorrectionPending then seedCorrectionPending=false; local _,wanted=seedRules.Parse(activeConfig.seedCode); if wanted then Isaac.StartNewGame(resolvePlayerType(activeConfig),Isaac.GetChallenge(),activeConfig.difficulty or 0,wanted,false) end; return end\n")
+	b.WriteString("    runLimits.Update()\n")
 	b.WriteString("    if sizeStartupFrames > 0 then sizeStartupFrames=sizeStartupFrames-1; if (sizeStartupFrames==44 or sizeStartupFrames==35 or sizeStartupFrames==15 or sizeStartupFrames==0) and tonumber(activeConfig.sizeSteps) and game:GetNumPlayers()>0 then local p=Isaac.GetPlayer(0);p:AddCacheFlags(CacheFlag.CACHE_SIZE);p:EvaluateItems() end end\n")
 	b.WriteString("    for i = 0, game:GetNumPlayers() - 1 do applyNoSoul(activeConfig, Isaac.GetPlayer(i)) end\n")
 	b.WriteString("    if game:GetNumPlayers() > 0 then applyTransformations(Isaac.GetPlayer(0)) end\n")
@@ -1114,6 +1148,7 @@ func buildGeneratedLua(cs []Challenge) string {
 	b.WriteString("    if cfg then activeConfig = cfg end\n")
 	b.WriteString("    return cfg\n")
 	b.WriteString("end\n\n")
+	b.WriteString("runLimits = include(\"cm_run_limits\").Attach(mod,game,currentConfig)\n")
 	b.WriteString("function mod:OnPostNewLevel()\n")
 	b.WriteString("    local cfg = currentConfig() if not cfg then return end\n")
 	b.WriteString("    rebuildBannedRoomSet()\n")

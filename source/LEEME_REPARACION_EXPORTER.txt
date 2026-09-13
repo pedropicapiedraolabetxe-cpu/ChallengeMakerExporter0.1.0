@@ -1,0 +1,26 @@
+REPARACION DE CHALLENGES EXPORTADOS
+
+El .exe anterior exporta size sin sizeSteps y no incluye la comprobacion de
+cartas y trinkets que aparecen directamente en las salas. Ademas, descarta
+bonus de damage, range, luck o shot speed superiores a 100.
+
+1. Extrae todos estos archivos en la carpeta de ChallengeMakerExporter.exe.
+2. Ejecuta ExportAndRepair.bat. Exporta el pack y CIERRA EL EXPORTER.
+3. Cuando se solicite, escribe la ruta de la carpeta mods de Isaac (tambien
+   puedes escribir la ruta del pack exportado concreto).
+4. Reinicia Isaac y prueba el challenge del pack exportado.
+
+Necesitas Python 3 con el lanzador "py" en Windows para el paso 3.
+Si ya habias exportado el pack, ejecuta RepairExportedChallenges.bat directamente.
+Despues de CADA nueva exportacion con ese .exe, ejecuta la reparacion otra vez.
+El script solo modifica packs con cm_pack.json de Challenge Maker. Guarda
+main.lua.bak antes de la primera modificacion y no modifica save1.dat. Para
+restaurar size, consulta los desafios guardados en
+data/challenge_maker/save1.dat (o save2.dat / save3.dat) junto a mods.
+Si moviste los mods a otra carpeta sin esos saves, escribe la ruta completa
+a save1.dat cuando el script la solicite. Para Grim Reaper, el save contiene
+sizeSteps = 2; despues de reparar, el pack debe contenerlo en main.lua.
+
+El codigo fuente Go del exporter tambien incorpora estas correcciones para
+compilar una version nueva mas adelante. Los .exe antiguos no se actualizan
+al cambiar el codigo fuente.

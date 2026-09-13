@@ -3,7 +3,15 @@ do
     local json = require('json')
     local rulesByName = json.decode(exportedConditionsJSON)
     for name, rules in pairs(rulesByName) do
-        if configsByName[name] then configsByName[name].conditions = rules end
+        if configsByName[name] then
+            local legacy=configsByName[name].legacyRequiredItemTokens or {}
+            if #legacy>0 then
+                local items={}
+                for _,token in ipairs(legacy) do items[#items+1]={token=token,name=token} end
+                rules[#rules+1]={mode="must",trigger="required_items",action="finish",extra={items=items}}
+            end
+            configsByName[name].conditions = rules
+        end
     end
     local initializing = true
     local stopped = false
@@ -21,7 +29,10 @@ do
             if continued and mod:HasData() then
                 local ok, saved = pcall(json.decode, mod:LoadData())
                 if ok and type(saved)=='table' and saved.challenge == Isaac.GetChallenge()
-                    and saved.seed == game:GetSeeds():GetStartSeed() then guard.Restore(saved.state) end
+                    and saved.seed == game:GetSeeds():GetStartSeed() then
+                    guard.Restore(saved.state)
+                    runLimits.Restore(saved.limits)
+                end
             end
             guard.ArmRunStart(not continued)
         end
@@ -29,7 +40,7 @@ do
     end)
     mod:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, function(_, shouldSave)
         if shouldSave and currentConfig() then
-            mod:SaveData(json.encode({challenge=Isaac.GetChallenge(), seed=game:GetSeeds():GetStartSeed(), state=guard.Snapshot()}))
+            mod:SaveData(json.encode({challenge=Isaac.GetChallenge(), seed=game:GetSeeds():GetStartSeed(), state=guard.Snapshot(), limits=runLimits.Snapshot()}))
         else mod:SaveData('{}') end
         stopped = true
     end)

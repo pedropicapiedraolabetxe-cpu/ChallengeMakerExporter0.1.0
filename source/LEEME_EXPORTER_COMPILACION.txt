@@ -1,0 +1,19 @@
+CHALLENGE MAKER EXPORTER 0.8.118 - COMPILACION WINDOWS
+
+Este paquete contiene el codigo fuente completo y las dependencias Lua que
+van integradas dentro del ejecutable. El archivo go.exe suelto no basta:
+debe estar instalado el SDK completo de Go para Windows.
+
+1. Extrae este ZIP en la carpeta donde esta ChallengeMakerExporter.exe.
+   Mantiene la subcarpeta source; no la borres.
+2. Ejecuta CompilarExporterWindows.bat en ese mismo equipo Windows.
+3. Cuando termine, abre ChallengeMakerExporter.exe normalmente.
+   El anterior se guarda como ChallengeMakerExporter.previous.exe.
+
+La version compilada exporta el campo sizeSteps, aplica el cambio de tamano
+al inicio y durante los primeros fotogramas, restaura el HUD al cerrar la
+descripcion, comprueba cartas y trinkets prohibidos generados directamente
+y conserva los bonus de stats altos validos. El pack generado no necesita
+RepairExportedChallenges.bat ni Python.
+
+Si la compilacion falla, el exporter anterior permanece sin cambios.

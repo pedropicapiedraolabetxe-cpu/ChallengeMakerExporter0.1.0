@@ -13,6 +13,7 @@ M.TriggerOptions[#M.TriggerOptions+1] = "boss_defeated"
 M.TriggerOptions[#M.TriggerOptions+1] = "item_used"
 M.TriggerOptions[#M.TriggerOptions+1] = "pickup_collected"
 M.TriggerOptions[#M.TriggerOptions+1] = "pickup_count"
+M.TriggerOptions[#M.TriggerOptions+1] = "required_items"
 M.TriggerOptions[#M.TriggerOptions+1] = "enemy_killed"
 M.TriggerOptions[#M.TriggerOptions+1] = "room_entered_x"
 M.TriggerOptions[#M.TriggerOptions+1] = "room_cleared_x"
@@ -91,6 +92,7 @@ function M.Name(key)
     if key == "item_used" then return "ITEM USED" end
     if key == "pickup_collected" then return "PICKUP COLLECTED" end
     if key == "pickup_count" then return "PICKUP COUNT" end
+    if key == "required_items" then return "REQUIRED ITEMS" end
     if key == "enemy_killed" then return "ENEMY KILLED" end
     if key == "room_entered_x" then return "ROOM ENTERED X TIMES" end
     if key == "room_cleared_x" then return "ROOM CLEARED X TIMES" end
@@ -232,6 +234,11 @@ local function validKeyBinding(binding)
 end
 local function validExtra(r)
     local x=r.extra
+    if r.trigger=="required_items" then
+        if type(x)~="table" or type(x.items)~="table" or #x.items==0 then return false end
+        for _,item in ipairs(x.items) do if type(item)~="table" or tostring(item.token or "")=="" then return false end end
+        return true
+    end
     if r.trigger=="health_threshold" then return type(x)=="table" and (x.direction=="above" or x.direction=="below") and tonumber(x.amount)~=nil end
     if r.trigger=="stat_threshold" then return type(x)=="table" and ({speed=true,tears=true,damage=true,range=true,shot_speed=true,luck=true})[x.stat]==true and (x.direction=="above" or x.direction=="below") and tonumber(x.amount)~=nil end
     if r.trigger=="has_property" then return type(x)=="table" and ((x.kind=="item" or x.kind=="trinket") and tostring(x.token or "")~="" or x.kind=="transformation" and tostring(x.key or "")~="") end
@@ -250,6 +257,10 @@ local function validExtra(r)
 end
 local function extraLabel(r)
     local x=r.extra or {}
+    if r.trigger=="required_items" then
+        local items=x.items or {}
+        return #items==1 and tostring(items[1].name or items[1].token) or tostring(#items).." ITEMS"
+    end
     if r.trigger=="health_threshold" then return string.upper(x.direction or "?").." "..M.FormatAmount(x.amount or 0).." HEARTS" end
     if r.trigger=="stat_threshold" then return string.upper(tostring(x.stat or "STAT"):gsub("_"," ")).." "..string.upper(x.direction or "?").." "..M.FormatAmount(x.amount or 0) end
     if r.trigger=="has_property" then return tostring(x.name or x.key or x.token or "PROPERTY") end
@@ -261,6 +272,7 @@ local function extraLabel(r)
 end
 function M.Valid(r)
     if type(r) ~= "table" or not triggerValid[r.trigger] then return false end
+    if r.trigger=="required_items" and r.mode~="must" then return false end
     if r.trigger == "grab_item" and not validGrab(r.grab) then return false end
     if isRoomTrigger(r.trigger) and not validRoomFilter(r.roomFilter) then return false end
     if r.trigger == "key_pressed" and not validKeyBinding(r.keyBinding) then return false end
@@ -695,12 +707,15 @@ function M.Attach(mod, game, getConfig, isInitializing, blockedItem)
         end
     end
     function guard.ArmRunStart(enabled) runStartPending=enabled==true end
-    function guard.CanFinish()
+    function guard.CanFinish(target)
         local c = config()
         if not c then return true end
         for i, rule in ipairs(c.conditions) do
-            if rule.enabled~=false and M.Valid(rule) and rule.mode=="must" then
-                if ({health_threshold=true,stat_threshold=true,has_property=true,active_fully_charged=true})[rule.trigger] then
+            if rule.enabled~=false and M.Valid(rule) and rule.mode=="must" and rule.action==(target or "finish") then
+                if rule.trigger=="required_items" then
+                    local p=game:GetNumPlayers()>0 and Isaac.GetPlayer(0) or nil
+                    if not p or not guard.ExtraSatisfied(rule,p) then return false end
+                elseif ({health_threshold=true,stat_threshold=true,has_property=true,active_fully_charged=true})[rule.trigger] then
                     local p=game:GetNumPlayers()>0 and Isaac.GetPlayer(0) or nil
                     if not p or not guard.ExtraSatisfied(rule,p) then return false end
                 elseif rule.trigger=="pickup_count" then
@@ -769,7 +784,13 @@ function M.Attach(mod, game, getConfig, isInitializing, blockedItem)
     function guard.ExtraSatisfied(rule,p)
         local x=rule.extra or {}
         local value=nil
-        if rule.trigger=="health_threshold" then value=(p:GetHearts()+p:GetSoulHearts()+p:GetBoneHearts()*2)/2
+        if rule.trigger=="required_items" then
+            for _,item in ipairs(x.items or {}) do
+                local id=M.Rewards.Resolve(item.token)
+                if not id or not p:HasCollectible(id,true) then return false end
+            end
+            return #(x.items or {})>0
+        elseif rule.trigger=="health_threshold" then value=(p:GetHearts()+p:GetSoulHearts()+p:GetBoneHearts()*2)/2
         elseif rule.trigger=="stat_threshold" then
             local s=stats(p); value=s[x.stat]; if x.stat=="range" and value then value=value/40 end
         elseif rule.trigger=="has_property" then
@@ -1308,10 +1329,12 @@ function M.Attach(mod, game, getConfig, isInitializing, blockedItem)
         local frames=tonumber(state.timerElapsed) or 0;if state.timerStarted then frames=frames+math.max(0,game:GetFrameCount()-state.timerStarted) end
         if frames>0 or state.timerStarted then Isaac.RenderText(string.format("TIMER %.2f",frames/30),16,34,1,1,1,1) end
         if not guard.CanFinish() and game:GetFrameCount() <= blockedMessageUntil then
-            Isaac.RenderText("TROPHY LOCKED: COMPLETE ALL MUST CONDITIONS", 25, 50, 1, 0.7, 0.3, 1)
+            Isaac.RenderText("TROPHY LOCKED: COMPLETE ALL REQUIREMENTS", 25, 50, 1, 0.7, 0.3, 1)
             local y = 63
             for i,r in ipairs(config().conditions) do
-                if M.Valid(r) and r.mode == "must" and not state.met[tostring(i)] then
+                if M.Valid(r) and r.mode == "must" and r.action=="finish"
+                    and (r.trigger=="required_items" and (game:GetNumPlayers()==0 or not guard.ExtraSatisfied(r,Isaac.GetPlayer(0)))
+                        or r.trigger~="required_items" and not state.met[tostring(i)]) then
                     Isaac.RenderText(M.Label(r),25,y,1,1,1,1)
                     y = y+12
                 end

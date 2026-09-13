@@ -13,6 +13,8 @@ M.fields = {
     {key="keys", label="STARTING KEYS", max=99},
     {key="activeCharge", label="ACTIVE CHARGE", max=99},
     {key="pocketCharge", label="POCKET ACTIVE CHARGE", max=99},
+    {key="maxTime", label="MAX TIME (SECONDS)", max=999999},
+    {key="maxLives", label="MAX LIVES (1 TO 99)", max=99, min=1},
 }
 
 M.curses = {
